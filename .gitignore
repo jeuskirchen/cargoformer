@@ -131,3 +131,6 @@ dmypy.json
 venv/
 *.zip
 visualShapeBench.json_0.json
+screenshots/
+datasets/
+cuboid_simulations/
