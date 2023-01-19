@@ -13,12 +13,13 @@ MODE = p.GUI
 SAVE = True
 TIMESTEP = 1/120
 NUM_STEPS = 500
-SAVE_EVERY_STEPS = 1
-NUM_ITEMS = 100
+SAVE_EVERY_STEPS = 1  # "checkpoint"
+NUM_ITEMS = 20
+ITEM_MARGIN = 1.0
 # NUM_SIMULATIONS = 1
 NUM_SIMULATIONS = int(sys.argv[1]) if len(sys.argv) > 1 else 1
 ORIENTATION_NOISE = 0.01
-
+# Photo configuration:
 TAKE_PHOTOS = False
 PHOTO_EVERY_STEPS = 10
 view_matrix = p.computeViewMatrix(cameraEyePosition=[1, 1, 1],
@@ -66,14 +67,15 @@ def generate_random_item():
 
 
 def intersects(item1, item2):
+    # https://gamedev.stackexchange.com/questions/23748/testing-whether-two-cubes-are-touching-in-space
     # True if item1 and item2 intersect
     # Note that w, h, d are half-extents!!
     x1, y1, z1, w1, d1, h1, _, _, _, _, _ = item1
     x2, y2, z2, w2, d2, h2, _, _, _, _, _ = item2
     # Just to make sure that they are also not too close to each other, add a small "margin" to each item
     # only for comparison purposes
-    w1, d1, h1 = np.array([w1, d1, h1]) + 0.01
-    w2, d2, h2 = np.array([w2, d2, h2]) + 0.01
+    w1, d1, h1 = np.array([w1, d1, h1]) + ITEM_MARGIN
+    w2, d2, h2 = np.array([w2, d2, h2]) + ITEM_MARGIN
     min_x1, max_x1, min_y1, max_y1, min_z1, max_z1 = x1-w1, x1+w1, y1-d1, y1+d1, z1-h1, z1+h1
     min_x2, max_x2, min_y2, max_y2, min_z2, max_z2 = x2-w2, x2+w2, y2-d2, y2+d2, z2-h2, z2+h2
     return ((min_x1 < min_x2 < max_x1) or (min_x2 < min_x1 < max_x2)) and \
@@ -107,7 +109,7 @@ def generate_realistic_example() -> List:
                 print("trying again")
                 proposed_item = generate_random_item()
         items.append(proposed_item)
-        print(proposed_item)
+        # print(proposed_item)
     return items
 
 
@@ -142,6 +144,7 @@ def run_simulation() -> np.array:
     # while True:
     for t in range(NUM_STEPS):
         if t % SAVE_EVERY_STEPS == 0:
+            # "Checkpoint":
             timestep_data = []
             for item_id, item in zip(item_ids, data):
                 _, _, _, w, d, h, _, _, _, _, m = item
@@ -149,7 +152,6 @@ def run_simulation() -> np.array:
                 # Note however that now the orientation is in quaternions, not Euler angles
                 # I could convert it back to Euler angles
                 # https://pybullet.org/Bullet/phpBB3/viewtopic.php?t=3404
-                # (I might have to, to compare it against the original orientation, for stability assessment)
                 timestep_data.append([*pos, w, d, h, *orn, m])
                 # print(t, (pos, orn))
             simulation_data.append(timestep_data)
