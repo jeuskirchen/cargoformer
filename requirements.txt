@@ -1,0 +1,7 @@
+numpy
+matplotlib
+pybullet
+sklearn
+squaternion
+# transformers
+# tensorflow

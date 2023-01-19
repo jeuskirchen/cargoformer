@@ -127,3 +127,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+venv/
+*.zip
+visualShapeBench.json_0.json
