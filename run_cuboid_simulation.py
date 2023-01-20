@@ -1,3 +1,4 @@
+import os
 import pybullet as p
 import pybullet_data
 from squaternion import Quaternion
@@ -13,6 +14,9 @@ MODE = p.GUI
 SAVE = True
 TIMESTEP = 1/120
 NUM_STEPS = 500
+EARLY_STOPPING = True  # stop if no significant change in positions
+EARLY_STOP_AFTER_NO_CHANGE_STEPS = 100
+EARLY_STOPPING_DELTA = 0.001
 SAVE_EVERY_STEPS = 1  # "checkpoint"
 NUM_ITEMS = 20
 ITEM_MARGIN = 1.0
@@ -44,7 +48,7 @@ projection_matrix = p.computeProjectionMatrixFOV(fov=fov,
 def generate_random_item():
     dim = np.random.uniform(0.1, 0.5, size=3).round(4)
     pos = [*np.random.uniform(-3.0, 3.0, size=2).round(4),
-           max(np.round(np.random.uniform(0, 3.0), 4), dim[2]/2+0.01)]
+           max(np.round(np.random.uniform(0, 3.0), 4), dim[2]/2+0.05)]
     # Making sure that the pos_height is at least the dim_height/2, otherwise the item is stuck in the ground
     # re-order so it's the same ordering as in pybullet; only if I use squaternion above!
     # each item's vector looks like this: [x, y, z, w, d, h, q1, q2, q3, q4, m]
@@ -106,22 +110,45 @@ def generate_realistic_example() -> List:
         proposed_item = generate_random_item()
         if i > 0:
             while any_intersects(proposed_item, items):
-                print("trying again")
+                # print("trying again")
                 proposed_item = generate_random_item()
         items.append(proposed_item)
         # print(proposed_item)
     return items
 
 
-def run_simulation() -> np.array:
+def calculate_delta(arr, t1=0, t2=-1, mean=True, axes=(0,1,2)):
+    # arr is of shape (num_timesteps, num_items, 11)
+    # axes: e.g. xy deltas would be axes=(0,1), full xyz delta would be axes=(0,1,2)
+    # (t1, t2): delta between these timesteps, default is (0, -1) meaning the delta between initial and final states
+    # FIXME: does it make sense to use the mean? just because there are 10 more items that, say, don't touch any other
+    #  items and none of them move in the xy dimension doesn't make the other items more stable; but with the mean, this
+    #  would drag down the overall delta
+    a = arr[t1,:,axes].reshape(-1, len(axes))  # initial state
+    b = arr[t2,:,axes].reshape(-1, len(axes))  # final state
+    # Mean Euclidean distance between final and initial states
+    delta = np.linalg.norm(b-a, axis=1).sum()
+    if mean:
+        delta /= len(a)
+    return delta
+
+
+def run_simulation(simulation_id: str = None) -> np.array:
     timestamp = str(dt.datetime.now()).replace(" ", "_").replace(":", "_").replace("-", "_").replace(".", "_")
-    data = generate_realistic_example()
+    if simulation_id is not None:
+        data = list(np.load(open(f"cuboid_simulations/{simulation_id}.npy", "rb"))[0])
+        print("Re-running", simulation_id)
+    else:
+        # If no simulation_id is provided, generate new realistic example
+        data = generate_realistic_example()
 
     print("Setting up physics engine")
     p.connect(MODE)
     # p.setPhysicsEngineParameter(numSolverIterations=10)
     p.setAdditionalSearchPath(pybullet_data.getDataPath())
     p.loadURDF("plane.urdf")
+    # p.loadURDF("bicycle/bike.urdf", basePosition=[0, 0, 5])
+    # p.loadURDF("table/table.urdf")  # already at correct location
     p.setGravity(0, 0, -10)
     p.setTimeStep(TIMESTEP)
 
@@ -141,6 +168,7 @@ def run_simulation() -> np.array:
 
     print("Running simulation")
     simulation_data = []
+    no_change_counter = 0
     # while True:
     for t in range(NUM_STEPS):
         if t % SAVE_EVERY_STEPS == 0:
@@ -155,6 +183,19 @@ def run_simulation() -> np.array:
                 timestep_data.append([*pos, w, d, h, *orn, m])
                 # print(t, (pos, orn))
             simulation_data.append(timestep_data)
+            if EARLY_STOPPING:
+                # get the 3d delta between last checkpoint and now, and if it's less than a small number, say 0.001, for
+                # say 50 timesteps in a row, we can stop "early"
+                delta = calculate_delta(np.array(simulation_data), t1=t-SAVE_EVERY_STEPS, t2=t, axes=(0,1,2))
+                if delta < EARLY_STOPPING_DELTA:
+                    # Counting subsequent timesteps without any significant 3d delta
+                    no_change_counter += SAVE_EVERY_STEPS
+                    if no_change_counter > EARLY_STOP_AFTER_NO_CHANGE_STEPS:
+                        print(f"Early stopping after {t} timesteps")
+                        break
+                else:
+                    # If there's a change, reset no_change_counter back to 0
+                    no_change_counter = 0
         if TAKE_PHOTOS & t % PHOTO_EVERY_STEPS == 0:
             _, _, rgb_img, dep_img, seg_img = p.getCameraImage(width=view_width,
                                                                height=view_height,
@@ -183,7 +224,8 @@ def run_simulation() -> np.array:
 
     print("Creating final array")
     arr = np.array(simulation_data)
-    if SAVE:
+    if SAVE and simulation_id is None:
+        # Only save if it's a new simulation
         filename = f"cuboid_simulations/{timestamp}.npy"
         print("Save to", filename)
         np.save(open(filename, "wb"), arr)
@@ -193,7 +235,30 @@ def run_simulation() -> np.array:
     return arr
 
 
+def find_minimum_delta_simulation(axes=(0,1)):
+    print("Finding minimum-delta simulation")
+    deltas = []
+    # min_simulation = None  # simulation corresponding to min_delta
+    min_simulation_id = None
+    for filename in os.listdir("cuboid_simulations"):
+        if ".npy" in filename:
+            v = np.load(open("cuboid_simulations/" + filename, "rb"))
+            delta = calculate_delta(v, axes=axes)
+            if len(deltas) > 0 and delta < min(deltas):
+                # min_simulation = v
+                min_simulation_id = filename.replace(".npy", "")
+            deltas.append(delta)
+    deltas = np.array(deltas)
+    print(" ", deltas.min())
+    print(" ", min_simulation_id)
+    return min_simulation_id
+
+
 if __name__ == "__main__":
     for i in range(NUM_SIMULATIONS):
         print("Simulation", i)
-        run_simulation()
+        sim = run_simulation(find_minimum_delta_simulation())
+        # sim = run_simulation()
+        print("Delta (xy):", np.round(calculate_delta(sim, axes=(0,1)), 4))
+    # What's the minimum-delta simulation so far? out of all existing simulations
+    # find_minimum_delta_simulation()
